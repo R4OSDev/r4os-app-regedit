@@ -26,6 +26,8 @@ const tree_w: i32 = 230;
 const button_w: i32 = 82;
 const button_h: i32 = 22;
 const button_gap: i32 = 6;
+const snapshot_depth_max: usize = 4;
+const snapshot_restart_max: usize = 3;
 
 const palette = r4os.gui.Palette{
     .text = 0x000000,
@@ -81,6 +83,12 @@ const ValueRow = struct {
 const Pane = enum {
     tree,
     values,
+};
+
+const SnapshotWalkResult = enum {
+    complete,
+    restart,
+    failed,
 };
 
 const Action = enum(u8) {
@@ -141,6 +149,13 @@ const App = struct {
     edit_data: r4os.gui.TextField(128) = .{},
     status: [160]u8 = .{0} ** 160,
     scratch_paths: [2][path_max]u8 = [_][path_max]u8{.{0} ** path_max} ** 2,
+    tree_snapshot_entries: [snapshot_depth_max][r4os.abi.registry_snapshot_page_max]r4os.abi.RegistrySnapshotEntry =
+        [_][r4os.abi.registry_snapshot_page_max]r4os.abi.RegistrySnapshotEntry{
+            [_]r4os.abi.RegistrySnapshotEntry{.{}} ** r4os.abi.registry_snapshot_page_max,
+        } ** snapshot_depth_max,
+    value_snapshot_entries: [max_values]r4os.abi.RegistrySnapshotEntry = [_]r4os.abi.RegistrySnapshotEntry{.{}} ** max_values,
+    value_snapshot_data: [max_values * data_max]u8 = .{0} ** (max_values * data_max),
+    tree_generation: u64 = 0,
 
     fn run(self: *App) i32 {
         if (self.ctx.desk.programWindowId() >= 0) return self.runHosted();
@@ -192,6 +207,36 @@ const App = struct {
     }
 
     fn refreshTree(self: *App) void {
+        if (self.ctx.sys.hasFn("registry_snapshot_begin") and self.ctx.sys.hasFn("registry_snapshot_page")) {
+            var attempt: usize = 0;
+            while (attempt < snapshot_restart_max) : (attempt += 1) {
+                self.tree_count = 0;
+                self.tree_generation = 0;
+                var root_index: usize = 0;
+                var walk_result: SnapshotWalkResult = .complete;
+                while (root_index < root_count) : (root_index += 1) {
+                    const root = rootShort(root_index);
+                    self.addTreeItem(root, 0, true);
+                    walk_result = self.enumerateChildrenSnapshot(root, 1, 0);
+                    if (walk_result != .complete) break;
+                }
+                switch (walk_result) {
+                    .complete => {
+                        self.setStatus("Ready.");
+                        return;
+                    },
+                    .restart => continue,
+                    .failed => {
+                        self.setStatus("Registry snapshot failed.");
+                        return;
+                    },
+                }
+            }
+            self.tree_count = 0;
+            self.setStatus("Registry changed repeatedly; refresh again.");
+            return;
+        }
+
         self.tree_count = 0;
         var root_index: usize = 0;
         while (root_index < root_count) : (root_index += 1) {
@@ -200,6 +245,45 @@ const App = struct {
             self.enumerateChildren(root, 1, 0);
         }
         self.setStatus("Ready.");
+    }
+
+    fn enumerateChildrenSnapshot(self: *App, parent_path: []const u8, depth: u8, level: u8) SnapshotWalkResult {
+        if (level >= snapshot_depth_max or self.tree_count >= self.tree.len) return .complete;
+        var parent_buf: [path_max]u8 = .{0} ** path_max;
+        const parent_z = makeZ(parent_path, parent_buf[0..]) orelse return .failed;
+        var cursor: r4os.abi.RegistrySnapshotCursor = .{};
+        const begin = self.ctx.sys.registrySnapshotBegin(parent_z, r4os.abi.registry_snapshot_kind_keys, &cursor);
+        if (begin == r4os.abi.registry_api_result_hive_not_found) {
+            if (self.tree_count > 0 and equalsIgnoreCase(self.tree[self.tree_count - 1].text(), parent_path))
+                self.tree[self.tree_count - 1].present = false;
+            return .complete;
+        }
+        if (begin == r4os.abi.registry_api_result_key_not_found) return .complete;
+        if (begin != r4os.abi.registry_api_result_ok) return .failed;
+        if (self.tree_generation == 0) self.tree_generation = cursor.generation else if (self.tree_generation != cursor.generation) return .restart;
+
+        var unused_data: [1]u8 = .{0};
+        while (true) {
+            const entries = self.tree_snapshot_entries[level][0..];
+            var page: r4os.abi.RegistrySnapshotPageInfo = .{};
+            const page_result = self.ctx.sys.registrySnapshotPage(&cursor, entries, unused_data[0..], &page);
+            if (page_result != r4os.abi.registry_api_result_ok) return .failed;
+            if (page.status == r4os.abi.registry_snapshot_status_restart or page.generation != self.tree_generation) return .restart;
+            if (page.status != r4os.abi.registry_snapshot_status_more and page.status != r4os.abi.registry_snapshot_status_complete)
+                return .failed;
+
+            const returned: usize = @intCast(page.returned);
+            var entry_index: usize = 0;
+            while (entry_index < returned and self.tree_count < self.tree.len) : (entry_index += 1) {
+                const entry = &entries[entry_index];
+                var child_path: [path_max]u8 = .{0} ** path_max;
+                const path = joinPath(child_path[0..], parent_path, spanZ(entry.name[0..])) orelse continue;
+                self.addTreeItem(path, depth, true);
+                const child_result = self.enumerateChildrenSnapshot(path, depth + 1, level + 1);
+                if (child_result != .complete) return child_result;
+            }
+            if (page.status == r4os.abi.registry_snapshot_status_complete or self.tree_count >= self.tree.len) return .complete;
+        }
     }
 
     fn enumerateChildren(self: *App, parent_path: []const u8, depth: u8, level: u8) void {
@@ -236,6 +320,88 @@ const App = struct {
     }
 
     fn refreshValues(self: *App) void {
+        if (self.ctx.sys.hasFn("registry_snapshot_begin") and self.ctx.sys.hasFn("registry_snapshot_page")) {
+            self.refreshValuesSnapshot();
+            return;
+        }
+        self.refreshValuesLegacy();
+    }
+
+    fn refreshValuesSnapshot(self: *App) void {
+        var attempt: usize = 0;
+        while (attempt < snapshot_restart_max) : (attempt += 1) {
+            self.value_count = 0;
+            self.value_selected = 0;
+            if (self.tree_count == 0) return;
+            const path_z = makeZ(self.selectedPath(), self.scratchPath(0)) orelse {
+                self.setStatus("Path too long.");
+                return;
+            };
+            var cursor: r4os.abi.RegistrySnapshotCursor = .{};
+            const begin = self.ctx.sys.registrySnapshotBegin(path_z, r4os.abi.registry_snapshot_kind_values, &cursor);
+            if (begin == r4os.abi.registry_api_result_hive_not_found) {
+                self.setStatus("SYSTEM hive missing. Rebuild default registry.");
+                return;
+            }
+            if (begin == r4os.abi.registry_api_result_key_not_found) {
+                self.setStatus("Key not found.");
+                return;
+            }
+            if (begin != r4os.abi.registry_api_result_ok) {
+                self.setStatus("Registry snapshot failed.");
+                return;
+            }
+
+            var page: r4os.abi.RegistrySnapshotPageInfo = .{};
+            const page_result = self.ctx.sys.registrySnapshotPage(
+                &cursor,
+                self.value_snapshot_entries[0..],
+                self.value_snapshot_data[0..],
+                &page,
+            );
+            if (page_result != r4os.abi.registry_api_result_ok) {
+                self.setStatus("Registry snapshot failed.");
+                return;
+            }
+            if (page.status == r4os.abi.registry_snapshot_status_restart) continue;
+            if (page.status != r4os.abi.registry_snapshot_status_more and page.status != r4os.abi.registry_snapshot_status_complete) {
+                self.setStatus("Registry snapshot invalid.");
+                return;
+            }
+
+            const returned: usize = @intCast(page.returned);
+            const page_data_len: usize = @intCast(page.data_bytes);
+            var index: usize = 0;
+            while (index < returned and self.value_count < self.values.len) : (index += 1) {
+                const entry = &self.value_snapshot_entries[index];
+                var row = ValueRow{};
+                copyZ(row.name[0..], spanZ(entry.name[0..]));
+                row.value_type = entry.value_type;
+                row.data_len = entry.data_len;
+                const data_offset: usize = @intCast(entry.data_offset);
+                const data_len: usize = @intCast(entry.data_len);
+                if ((entry.flags & r4os.abi.registry_snapshot_entry_flag_data_present) != 0 and
+                    data_len <= row.data.len and data_offset <= page_data_len and data_len <= page_data_len - data_offset)
+                {
+                    if (data_len != 0) @memcpy(row.data[0..data_len], self.value_snapshot_data[data_offset .. data_offset + data_len]);
+                    formatValueDisplay(&row);
+                } else if ((entry.flags & r4os.abi.registry_snapshot_entry_flag_data_omitted) != 0 or data_len > row.data.len) {
+                    row.large = true;
+                    setZ(row.display[0..], "<large>");
+                } else {
+                    setZ(row.display[0..], "<read failed>");
+                }
+                self.values[self.value_count] = row;
+                self.value_count += 1;
+            }
+            if (self.value_count == 0) self.setStatus("Key has no values.") else self.setStatus("Ready.");
+            return;
+        }
+        self.value_count = 0;
+        self.setStatus("Registry changed repeatedly; refresh again.");
+    }
+
+    fn refreshValuesLegacy(self: *App) void {
         self.value_count = 0;
         self.value_selected = 0;
         if (self.tree_count == 0) return;
@@ -800,6 +966,8 @@ const App = struct {
 
 noinline fn runSelfTest(ctx: *AppApi) i32 {
     if (!ctx.sys.hasFn("registry_get_value") or !ctx.sys.hasFn("registry_set_value")) return selfTestFail(ctx, "api-missing");
+    if (!ctx.sys.hasFn("registry_snapshot_begin") or !ctx.sys.hasFn("registry_snapshot_page") or !ctx.sys.hasFn("registry_batch_mutate"))
+        return selfTestFail(ctx, "snapshot-batch-api-missing");
 
     var system_hive_buf: [path_max]u8 = .{0} ** path_max;
     var system_tmp_buf: [path_max]u8 = .{0} ** path_max;
@@ -813,25 +981,24 @@ noinline fn runSelfTest(ctx: *AppApi) i32 {
     _ = ctx.sys.fileDelete(regedit_bak);
     if (had_system and ctx.sys.fileCopy(system_hive, regedit_bak) <= 0) return selfTestFail(ctx, "backup-failed");
 
-    var key_buf: [path_max]u8 = .{0} ** path_max;
-    var name_buf: [path_max]u8 = .{0} ** path_max;
-    var count_buf: [path_max]u8 = .{0} ** path_max;
-    var flag_buf: [path_max]u8 = .{0} ** path_max;
-    const key = literalZ("SYSTEM\\RegeditSelftest", key_buf[0..]) orelse return restoreSelfTest(ctx, had_system, "path-too-long");
-    const name = literalZ("Name", name_buf[0..]) orelse return restoreSelfTest(ctx, had_system, "path-too-long");
-    const count = literalZ("Count", count_buf[0..]) orelse return restoreSelfTest(ctx, had_system, "path-too-long");
-    const flag = literalZ("Flag", flag_buf[0..]) orelse return restoreSelfTest(ctx, had_system, "path-too-long");
-
-    if (ctx.sys.registrySetString(key, name, "Regedit") != r4os.abi.registry_api_result_ok) return restoreSelfTest(ctx, had_system, "set-string");
-    if (ctx.sys.registrySetU32(key, count, 46) != r4os.abi.registry_api_result_ok) return restoreSelfTest(ctx, had_system, "set-u32");
-    if (ctx.sys.registrySetBool(key, flag, true) != r4os.abi.registry_api_result_ok) return restoreSelfTest(ctx, had_system, "set-bool");
+    const facade_key = r4os.RegistryPath.parse("SYSTEM\\RegeditSelftest") catch return restoreSelfTest(ctx, had_system, "path-too-long");
+    var operation_storage: [3]r4os.abi.RegistryBatchOperation = undefined;
+    var blob_storage: [256]u8 = undefined;
+    var builder = r4os.RegistryBatchBuilder.init(operation_storage[0..], blob_storage[0..]);
+    builder.setString(&facade_key, "Name", "Regedit") catch return restoreSelfTest(ctx, had_system, "batch-build-string");
+    builder.setU32(&facade_key, "Count", 46) catch return restoreSelfTest(ctx, had_system, "batch-build-u32");
+    builder.setBool(&facade_key, "Flag", true) catch return restoreSelfTest(ctx, had_system, "batch-build-bool");
+    const registry_api = r4os.Registry{ .sys = ctx.sys };
+    if (!registry_api.applyBatch(&builder).committed()) return restoreSelfTest(ctx, had_system, "batch-seed");
 
     const model_error = selfTestModel(ctx);
     if (model_error.len != 0) return restoreSelfTest(ctx, had_system, model_error);
 
-    if (ctx.sys.registryDeleteValue(key, name) != r4os.abi.registry_api_result_ok) return restoreSelfTest(ctx, had_system, "delete-string");
-    if (ctx.sys.registryDeleteValue(key, count) != r4os.abi.registry_api_result_ok) return restoreSelfTest(ctx, had_system, "delete-u32");
-    if (ctx.sys.registryDeleteValue(key, flag) != r4os.abi.registry_api_result_ok) return restoreSelfTest(ctx, had_system, "delete-bool");
+    builder.reset();
+    builder.delete(&facade_key, "Name") catch return restoreSelfTest(ctx, had_system, "batch-delete-string");
+    builder.delete(&facade_key, "Count") catch return restoreSelfTest(ctx, had_system, "batch-delete-u32");
+    builder.delete(&facade_key, "Flag") catch return restoreSelfTest(ctx, had_system, "batch-delete-bool");
+    if (!registry_api.applyBatch(&builder).committed()) return restoreSelfTest(ctx, had_system, "batch-cleanup");
 
     if (had_system) {
         _ = ctx.sys.fileDelete(system_hive);
@@ -842,6 +1009,7 @@ noinline fn runSelfTest(ctx: *AppApi) i32 {
         _ = ctx.sys.fileDelete(system_bak);
     }
     _ = ctx.sys.fileDelete(regedit_bak);
+    ctx.sys.println("REGEDIT snapshot batch selftest: OK");
     ctx.sys.println("REGEDIT selftest: OK");
     return 0;
 }

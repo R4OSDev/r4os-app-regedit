@@ -4,13 +4,18 @@
 
 ## Package
 
-- Version: `0.1.1`
+- Version: `0.1.2`
 - Image target: `/R4OS/SOFTWARE/DESKTOP/REGEDIT.R4X`
 - Image scope: `full`
 - Canonical project manifest: `module.R4MF`
 
 The manifest is the single source of truth for the artifact, imports, image
 target, and package metadata.
+
+Registry trees and values use generation-checked bounded snapshot pages when
+the optional R4SYS extension is present. The legacy per-entry API remains the
+runtime fallback; the self-test exercises atomic batch setup and snapshot
+consumption.
 
 ## Build
 

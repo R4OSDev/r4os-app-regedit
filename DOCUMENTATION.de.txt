@@ -1,25 +1,31 @@
 ﻿REGEDIT.R4X
 ===========
 
-REGEDIT.R4X ist das interaktive Registry-Werkzeug.
+REGEDIT.R4X ist das interaktive Registry-Werkzeug fuer die SYSTEM-Hive.
+`build.zig` baut die App als eigenstaendiges SDK-Projekt; `module.R4MF` ist
+die Wahrheit fuer Artefakt, Version, Zielpfad, App-Klasse und Imports.
 
-Projektstruktur seit 0.51.18:
-- `build.zig` baut die App als eigenes SDK-Projekt.
-- `build.zig.zon` bindet `r4os_sdk` als Paket.
-- `module.R4MF` beschreibt Artefakt, Zielpfad und Contract.
+Build im Repository `Repositories/Apps/RegEdit`:
 
-Build:
+    Build.bat
+    ./Build.sh
 
-    cd Code\System\Software\RegEdit
-    ..\..\..\DevTools\Zig\zig.exe build
+Seit 0.1.2 liest die Baum- und Wertansicht ueber generationsgebundene,
+begrenzte Registry-Snapshotseiten. Direkte Tabellenbereiche ersetzen die
+fruehere Einzelabfrage je Element. Aendert sich die Hivegeneration zwischen
+Seiten oder zwischen den Baumebenen, verwirft REGEDIT den angefangenen Stand
+und beginnt begrenzt neu; ein gemischter Baum wird nicht angezeigt. Werte
+liegen nur waehrend des Aufrufs in den von REGEDIT bereitgestellten Puffern.
+Zu grosse Werte werden als `<large>` markiert.
 
-Ergebnis:
-
-    Code\System\Software\RegEdit\zig-out\REGEDIT.R4X
+Neue und alte Kernel bleiben kompatibel: fehlen die optionalen Snapshotslots,
+nutzt die App die bisherigen `registry_key_info`-, `registry_enum_*`- und
+`registry_get_value`-Operationen. `/SELFTEST` verlangt beim aktuellen Kernel
+Snapshot und Batch, setzt beziehungsweise entfernt seine drei Testwerte
+jeweils als eine atomare Generation und prueft das echte Ansichtsmodell.
 
 Contract:
-- R4XStart-Entry: `regedit_main`
-- App-Klasse: `console`
-- R4L-Imports: `R4DESK:Query:1`, `R4DRAW:Query:1`
-- Zielpfad im Image: `C:\R4OS\SOFTWARE\DESKTOP\REGEDIT.R4X`
-
+- Entry-Modus: `app`
+- App-Klasse: `console` (GUI-Imports fuer den normalen Desktopstart)
+- Imports: `R4SYS:Query:1`, `R4DESK:Query:1`, `R4DRAW:Query:1`
+- Zielpfad: `C:\R4OS\SOFTWARE\DESKTOP\REGEDIT.R4X`
