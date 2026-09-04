@@ -196,8 +196,8 @@ const App = struct {
         var info: r4os.abi.GuiWindowInfo = .{};
         _ = self.ctx.desk.guiWindowInfo(&info);
         const canvas = r4os.gui.Canvas.init(&self.ctx.draw, info);
-        self.w = clampI32(canvas.w, 700, 1600);
-        self.h = clampI32(canvas.h, 360, 1000);
+        self.w = @max(canvas.w, 700);
+        self.h = @max(canvas.h, 360);
     }
 
     fn refreshAll(self: *App) void {
@@ -1204,10 +1204,6 @@ fn joinPath(out: []u8, parent: []const u8, child: []const u8) ?[]const u8 {
     @memcpy(out[parent.len + 1 .. parent.len + 1 + child.len], child);
     out[parent.len + 1 + child.len] = 0;
     return out[0 .. parent.len + 1 + child.len];
-}
-
-fn clampI32(value: i32, min_value: i32, max_value: i32) i32 {
-    return @min(@max(value, min_value), max_value);
 }
 
 fn readU32(data: []const u8, offset: usize) u32 {
