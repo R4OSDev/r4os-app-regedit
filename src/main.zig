@@ -964,22 +964,27 @@ const App = struct {
     }
 };
 
+const selftest_paths = r4os.registry_selftest.Paths{
+    .hive = "C:\\R4OS\\REGISTRY\\SYSTEM.R4R",
+    .tmp = "C:\\R4OS\\REGISTRY\\SYSTEM.TMP",
+    .bak = "C:\\R4OS\\REGISTRY\\SYSTEM.BAK",
+    .original = "C:\\R4OS\\REGISTRY\\SYSTEM.REB",
+    .stage = "C:\\R4OS\\REGISTRY\\REGEDIT.RST",
+    .displaced = "C:\\R4OS\\REGISTRY\\REGEDIT.OLD",
+};
+// Diagnostic scratch is outside the UI stack; normal editing never uses it.
+var selftest_original: [32768]u8 = undefined;
+var selftest_check: [32768]u8 = undefined;
+
 noinline fn runSelfTest(ctx: *AppApi) i32 {
+    if (!r4os.registry_selftest.privateImage(&ctx.sys)) return selfTestFail(ctx, "private-test-image-required");
+    if (!ctx.sys.hasFn("file_replace_atomic")) return selfTestFail(ctx, "atomic-replace-unavailable");
     if (!ctx.sys.hasFn("registry_get_value") or !ctx.sys.hasFn("registry_set_value")) return selfTestFail(ctx, "api-missing");
     if (!ctx.sys.hasFn("registry_snapshot_begin") or !ctx.sys.hasFn("registry_snapshot_page") or !ctx.sys.hasFn("registry_batch_mutate"))
         return selfTestFail(ctx, "snapshot-batch-api-missing");
 
-    var system_hive_buf: [path_max]u8 = .{0} ** path_max;
-    var system_tmp_buf: [path_max]u8 = .{0} ** path_max;
-    var system_bak_buf: [path_max]u8 = .{0} ** path_max;
-    var regedit_bak_buf: [path_max]u8 = .{0} ** path_max;
-    const system_hive = literalZ("C:\\R4OS\\REGISTRY\\SYSTEM.R4R", system_hive_buf[0..]) orelse return selfTestFail(ctx, "path-too-long");
-    const system_tmp = literalZ("C:\\R4OS\\REGISTRY\\SYSTEM.TMP", system_tmp_buf[0..]) orelse return selfTestFail(ctx, "path-too-long");
-    const system_bak = literalZ("C:\\R4OS\\REGISTRY\\SYSTEM.BAK", system_bak_buf[0..]) orelse return selfTestFail(ctx, "path-too-long");
-    const regedit_bak = literalZ("C:\\R4OS\\REGISTRY\\SYSTEM.REB", regedit_bak_buf[0..]) orelse return selfTestFail(ctx, "path-too-long");
-    const had_system = ctx.sys.exists(system_hive);
-    _ = ctx.sys.fileDelete(regedit_bak);
-    if (had_system and ctx.sys.fileCopy(system_hive, regedit_bak) <= 0) return selfTestFail(ctx, "backup-failed");
+    const had_system = r4os.registry_selftest.backup(&ctx.sys, selftest_paths, &selftest_original, &selftest_check) orelse
+        return selfTestFail(ctx, "backup-failed-or-recovery-files-in-use");
 
     const facade_key = r4os.RegistryPath.parse("SYSTEM\\RegeditSelftest") catch return restoreSelfTest(ctx, had_system, "path-too-long");
     var operation_storage: [3]r4os.abi.RegistryBatchOperation = undefined;
@@ -1000,15 +1005,7 @@ noinline fn runSelfTest(ctx: *AppApi) i32 {
     builder.delete(&facade_key, "Flag") catch return restoreSelfTest(ctx, had_system, "batch-delete-bool");
     if (!registry_api.applyBatch(&builder).committed()) return restoreSelfTest(ctx, had_system, "batch-cleanup");
 
-    if (had_system) {
-        _ = ctx.sys.fileDelete(system_hive);
-        _ = ctx.sys.fileCopy(regedit_bak, system_hive);
-    } else {
-        _ = ctx.sys.fileDelete(system_hive);
-        _ = ctx.sys.fileDelete(system_tmp);
-        _ = ctx.sys.fileDelete(system_bak);
-    }
-    _ = ctx.sys.fileDelete(regedit_bak);
+    if (!finishSelfTest(ctx, had_system)) return selfTestFail(ctx, "restore-failed; check SYSTEM.REB");
     ctx.sys.println("REGEDIT snapshot batch selftest: OK");
     ctx.sys.println("REGEDIT selftest: OK");
     return 0;
@@ -1025,24 +1022,12 @@ noinline fn selfTestModel(ctx: *AppApi) []const u8 {
     return "";
 }
 
+fn finishSelfTest(ctx: *AppApi, had_system: bool) bool {
+    return r4os.registry_selftest.restore(&ctx.sys, selftest_paths, had_system, &selftest_original, &selftest_check);
+}
+
 fn restoreSelfTest(ctx: *AppApi, had_system: bool, text: []const u8) i32 {
-    var system_hive_buf: [path_max]u8 = .{0} ** path_max;
-    var system_tmp_buf: [path_max]u8 = .{0} ** path_max;
-    var system_bak_buf: [path_max]u8 = .{0} ** path_max;
-    var regedit_bak_buf: [path_max]u8 = .{0} ** path_max;
-    const system_hive = literalZ("C:\\R4OS\\REGISTRY\\SYSTEM.R4R", system_hive_buf[0..]) orelse return selfTestFail(ctx, text);
-    const system_tmp = literalZ("C:\\R4OS\\REGISTRY\\SYSTEM.TMP", system_tmp_buf[0..]) orelse return selfTestFail(ctx, text);
-    const system_bak = literalZ("C:\\R4OS\\REGISTRY\\SYSTEM.BAK", system_bak_buf[0..]) orelse return selfTestFail(ctx, text);
-    const regedit_bak = literalZ("C:\\R4OS\\REGISTRY\\SYSTEM.REB", regedit_bak_buf[0..]) orelse return selfTestFail(ctx, text);
-    if (had_system) {
-        _ = ctx.sys.fileDelete(system_hive);
-        _ = ctx.sys.fileCopy(regedit_bak, system_hive);
-    } else {
-        _ = ctx.sys.fileDelete(system_hive);
-        _ = ctx.sys.fileDelete(system_tmp);
-        _ = ctx.sys.fileDelete(system_bak);
-    }
-    _ = ctx.sys.fileDelete(regedit_bak);
+    if (!finishSelfTest(ctx, had_system)) ctx.sys.println("REGEDIT: restore failed; check SYSTEM.REB");
     return selfTestFail(ctx, text);
 }
 
