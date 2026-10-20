@@ -79,3 +79,7 @@ acht teilweisen Scratchallokationen. Ein lokaler SMP4-Gast verwendet eine
 frisch erzeugte private246-Byte-Hive, prueft beide vorhandenen Selbsttests,
 Originalbytes, Cachegeneration1 und Bereinigung. Keine regulaere Installation
 wird als Testbestand verwendet. Belege unter Temp/roadmap-078-execution/07864.
+
+0.85.44: Rebuilt with SDK0.64.57 and the shared R4STD Unicode17.0.0
+extended grapheme editing boundaries. Byte offsets, scalar font advances
+and grapheme clusters are distinct; no shaping or BiDi support is implied.

@@ -183,7 +183,7 @@ const App = struct {
                     },
                     .mouse_down => self.handleMouseDown(event.x, event.y),
                     .mouse_up => self.handleMouseUp(event.x, event.y),
-                    .key_down => self.handleKey(@intCast(event.key & 0xff)),
+                    .key_down => self.handleKey(event.key),
                     else => {},
                 }
             }
@@ -622,9 +622,10 @@ const App = struct {
         self.render();
     }
 
-    fn handleKey(self: *App, key: u8) void {
+    fn handleKey(self: *App, codepoint: u32) void {
+        const key: u8 = if (codepoint <= 0xff) @intCast(codepoint) else 0;
         if (self.edit_mode != .none) {
-            if (self.handleEditKey(key)) self.render();
+            if (self.handleEditKey(codepoint)) self.render();
             return;
         }
 
@@ -664,7 +665,8 @@ const App = struct {
         }
     }
 
-    fn handleEditKey(self: *App, key: u8) bool {
+    fn handleEditKey(self: *App, codepoint: u32) bool {
+        const key: u8 = if (codepoint <= 0xff) @intCast(codepoint) else 0;
         switch (key) {
             r4os.gui.Key.escape => {
                 self.closeEdit();
@@ -681,8 +683,8 @@ const App = struct {
             else => {},
         }
         return switch (self.edit_focus) {
-            .name => self.edit_name.handleClipboardKey(&self.ctx.desk, key),
-            .data => self.edit_data.handleClipboardKey(&self.ctx.desk, key),
+            .name => self.edit_name.handleClipboardCodepoint(&self.ctx.desk, codepoint),
+            .data => self.edit_data.handleClipboardCodepoint(&self.ctx.desk, codepoint),
             .ok, .cancel => false,
         };
     }
