@@ -65,3 +65,12 @@ acht teilweisen Scratchallokationen. Ein lokaler SMP4-Gast verwendet eine
 frisch erzeugte private246-Byte-Hive, prueft beide vorhandenen Selbsttests,
 Originalbytes, Cachegeneration1 und Bereinigung. Keine regulaere Installation
 wird als Testbestand verwendet. Belege unter Temp/roadmap-078-execution/07864.
+
+API-Migration 0.90.68
+---------------------
+RegEdit10 verwendet App2/Query2 und normale SDK201-/Contract93-Auswahl.
+Die deklarierte Konsolenklasse bedient CLI und Selbsttest. Explizite GUI-
+Policy startet den vorhandenen Editor. Der gemeinsame EventLoop besitzt
+Leerlauf, Close und Fehler. Fontwechsel baut Canvas und Layout neu auf.
+ArgumentCursor ersetzt den lokalen Schalterparser. Registry-Snapshots und
+Batchmutationen laufen ueber die echte Query2-Tabelle.

@@ -5,7 +5,7 @@ const AppApi = struct {
     desk: r4os.r4desk.Context,
     draw: r4os.r4draw.Context,
 
-    fn init(r4_app: *r4os.App) ?AppApi {
+    fn init(r4_app: *r4os.App2) ?AppApi {
         return .{
             .sys = r4_app.system(),
             .desk = r4_app.desktop() orelse return null,
@@ -113,11 +113,11 @@ const EditFocus = enum {
     cancel,
 };
 
-pub fn r4_app_main(r4_app: *r4os.App) i32 {
+pub fn r4_app_main(r4_app: *r4os.App2) i32 {
     var ctx = AppApi.init(r4_app) orelse return r4os.abi.err_no_group;
     const raw_args = ctx.sys.argsRaw();
     const args = trim(zSlice(raw_args));
-    if (argsContain(args, "/SELFTEST") or argsContain(args, "SELFTEST")) return runSelfTest(&ctx);
+    if ((argsContain(args, "/SELFTEST") catch |err| return r4os.arguments.code(err)) or (argsContain(args, "SELFTEST") catch |err| return r4os.arguments.code(err))) return runSelfTest(&ctx);
 
     return runGui(&ctx);
 }
@@ -171,28 +171,32 @@ const App = struct {
         self.updateMetrics();
         self.render();
 
+        var events = r4os.EventLoop.init(self.ctx.sys, self.ctx.desk, &.{});
         while (!self.ctx.sys.programShouldClose() and !self.should_exit) {
-            var event: r4os.abi.GuiEvent = .{};
-            while (self.ctx.desk.guiPollEvent(&event) > 0) {
-                const kind: r4os.abi.GuiEventKind = @enumFromInt(event.kind);
-                switch (kind) {
-                    .close => return 0,
-                    .resize => {
-                        self.updateMetrics();
-                        self.render();
-                    },
-                    .input_reset, .focus_lost => {
-                        const repaint = self.pressed_action != null;
-                        self.pressed_action = null;
-                        if (repaint) self.render();
-                    },
-                    .mouse_down => self.handleMouseDown(event.x, event.y),
-                    .mouse_up => self.handleMouseUp(event.x, event.y),
-                    .key_down => self.handleKey(event.key),
-                    else => {},
-                }
+            switch (events.wait(r4os.time_contract.timeoutForever())) {
+                .message => |message| {
+                    const event = message.guiEvent() orelse continue;
+                    const kind: r4os.abi.GuiEventKind = @enumFromInt(event.kind);
+                    switch (kind) {
+                        .close => return 0,
+                        .resize, .font_changed => {
+                            self.updateMetrics();
+                            self.render();
+                        },
+                        .input_reset, .focus_lost => {
+                            const repaint = self.pressed_action != null;
+                            self.pressed_action = null;
+                            if (repaint) self.render();
+                        },
+                        .mouse_down => self.handleMouseDown(event.x, event.y),
+                        .mouse_up => self.handleMouseUp(event.x, event.y),
+                        .key_down => self.handleKey(event.key),
+                        else => {},
+                    }
+                },
+                .failure => |raw| return raw,
+                .timed_out => {},
             }
-            self.ctx.sys.sleepTicks(3);
         }
         return 0;
     }
@@ -1248,26 +1252,13 @@ fn hexNibble(ch: u8) ?u64 {
     return null;
 }
 
-fn argsContain(args_raw: []const u8, needle: []const u8) bool {
-    var rest = args_raw;
-    while (takeToken(rest)) |part| {
-        if (equalsIgnoreCase(part.token, needle)) return true;
-        rest = part.rest;
+fn argsContain(args: []const u8, needle: []const u8) r4os.arguments.Error!bool {
+    var detail: r4os.arguments.Failure = .{};
+    var cursor = try r4os.arguments.ArgCursor.init(args, .{ .quotes = 0, .switches = 0 }, &detail);
+    while (try cursor.next()) |part| {
+        if (equalsIgnoreCase(try part.bytes(args), needle)) return true;
     }
     return false;
-}
-
-const Token = struct {
-    token: []const u8,
-    rest: []const u8,
-};
-
-fn takeToken(text_raw: []const u8) ?Token {
-    const text = trim(text_raw);
-    if (text.len == 0) return null;
-    var index: usize = 0;
-    while (index < text.len and !isSpace(text[index])) : (index += 1) {}
-    return .{ .token = text[0..index], .rest = text[index..] };
 }
 
 fn zSlice(ptr: [*:0]const u8) []const u8 {

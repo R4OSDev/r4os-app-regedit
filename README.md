@@ -4,7 +4,7 @@
 
 ## Package
 
-- Version: `0.1.6`
+- Version: `0.1.10`
 - Image target: `/R4OS/SOFTWARE/DESKTOP/REGEDIT.R4X`
 - Image scope: `full`
 - Canonical project manifest: `module.R4MF`
@@ -13,7 +13,7 @@ The manifest is the single source of truth for the artifact, imports, image
 target, and package metadata.
 
 Registry trees and values use generation-checked bounded snapshot pages when
-the optional R4SYS extension is present. The legacy per-entry API remains the
+the optional R4SYS extension is present. The current per-entry Query2 operations provide the
 runtime fallback; the self-test exercises atomic batch setup and snapshot
 consumption.
 
@@ -83,3 +83,11 @@ wird als Testbestand verwendet. Belege unter Temp/roadmap-078-execution/07864.
 0.85.44: Rebuilt with SDK0.64.57 and the shared R4STD Unicode17.0.0
 extended grapheme editing boundaries. Byte offsets, scalar font advances
 and grapheme clusters are distinct; no shaping or BiDi support is implied.
+
+API migration 0.90.68
+---------------------
+RegEdit uses normal App2/Query2 from SDK201/Contract93. Its manifest declares
+console for the CLI/self-test entry. Explicit GUI launch opens the existing
+Registry Editor. The common EventLoop handles idle waiting, error and Close.
+Font changes rebuild Canvas/layout. The shared argument cursor replaces the
+local switch scanner. Registry snapshot and batch operations bind Query2.
