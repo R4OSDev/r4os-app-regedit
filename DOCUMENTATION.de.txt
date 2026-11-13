@@ -27,7 +27,7 @@ jeweils als eine atomare Generation und prueft das echte Ansichtsmodell.
 Contract:
 - Entry-Modus: `app`
 - App-Klasse: `console` (GUI-Imports fuer den normalen Desktopstart)
-- Imports: `R4SYS:Query:1`, `R4DESK:Query:1`, `R4DRAW:Query:1`
+- Imports: `R4SYS:Query2:2`, `R4DESK:Query2:2`, `R4DRAW:Query2:2`
 - Zielpfad: `C:\R4OS\SOFTWARE\DESKTOP\REGEDIT.R4X`
 
 
